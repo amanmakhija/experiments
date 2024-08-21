@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Peer from "peerjs";
+import Peer, { DataConnection } from "peerjs";
 
 const Home = () => {
   const [peerID, setPeerID] = useState<string>("");
@@ -12,9 +12,12 @@ const Home = () => {
   const [isPeerConnected, setIsPeerConnected] = useState<boolean>(false);
   const [isIncomingAudioMuted, setIsIncomingAudioMuted] =
     useState<boolean>(false);
+  const [isIncomingVideoMuted, setIsIncomingVideoMuted] =
+    useState<boolean>(false);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const dataConnectionRef = useRef<DataConnection | null>(null);
 
   useEffect(() => {
     if (!peerInstance) {
@@ -36,16 +39,36 @@ const Home = () => {
             }
             call.answer(stream);
             call.on("stream", (remoteStream) => {
-              console.log("remoteStream", remoteStream.getAudioTracks());
-
-              remoteStream.getAudioTracks().forEach((track) => {
-                setIsIncomingAudioMuted(!track.enabled);
-              });
               if (remoteVideoRef.current) {
                 remoteVideoRef.current.srcObject = remoteStream;
               }
             });
+
+            const dataConnection = peer.connect(call.peer);
+            dataConnectionRef.current = dataConnection;
+            dataConnection.on("open", () => {
+              dataConnection.on("data", (data: any) => {
+                if (data.type === "audio") {
+                  setIsIncomingAudioMuted(data.muted);
+                }
+                if (data.type === "video") {
+                  setIsIncomingVideoMuted(data.muted);
+                }
+              });
+            });
           });
+      });
+
+      peer.on("connection", (connection) => {
+        dataConnectionRef.current = connection;
+        connection.on("data", (data: any) => {
+          if (data.type === "audio") {
+            setIsIncomingAudioMuted(data.muted);
+          }
+          if (data.type === "video") {
+            setIsIncomingVideoMuted(data.muted);
+          }
+        });
       });
     }
 
@@ -63,18 +86,28 @@ const Home = () => {
             localVideoRef.current.srcObject = stream;
           }
 
-          console.log("stream", stream.getAudioTracks());
-
-          stream.getAudioTracks().forEach((track) => {
-            setIsIncomingAudioMuted(!track.enabled);
-          });
-
           const call = peerInstance.call(remotePeerID, stream);
 
           call.on("stream", (remoteStream) => {
             if (remoteVideoRef.current) {
               remoteVideoRef.current.srcObject = remoteStream;
             }
+          });
+
+          const dataConnection = peerInstance.connect(remotePeerID);
+          dataConnectionRef.current = dataConnection;
+          dataConnection.on("open", () => {
+            dataConnection.send({ type: "audio", muted: isMuted });
+
+            dataConnection.on("data", (data: any) => {
+              if (data.type === "audio") {
+                setIsIncomingAudioMuted(data.muted);
+              }
+              console.log(data);
+              if (data.type === "video") {
+                setIsIncomingVideoMuted(data.muted);
+              }
+            });
           });
         });
     }
@@ -91,6 +124,10 @@ const Home = () => {
           track.enabled = !newMuteState;
         });
     }
+
+    if (dataConnectionRef.current) {
+      dataConnectionRef.current.send({ type: "audio", muted: newMuteState });
+    }
   };
 
   const togglePause = () => {
@@ -104,6 +141,10 @@ const Home = () => {
       if (isPaused) localVideoRef.current.pause();
       else localVideoRef.current.play();
     }
+
+    if (dataConnectionRef.current) {
+      dataConnectionRef.current.send({ type: "video", muted: isPaused });
+    }
   };
 
   return (
@@ -115,6 +156,11 @@ const Home = () => {
           <div>Remote audio is muted</div>
         ) : (
           <div>Remote audio is not muted</div>
+        )}
+        {isIncomingVideoMuted ? (
+          <div>Remote video is muted</div>
+        ) : (
+          <div>Remote video is not muted</div>
         )}
       </div>
       <button onClick={toggleMute}>{isMuted ? "Unmute" : "Mute"}</button>
