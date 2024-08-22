@@ -163,7 +163,7 @@ const Home = () => {
     <div>
       <div>
         <video ref={localVideoRef} autoPlay muted />
-        {!isIncomingVideoMuted && <video ref={remoteVideoRef} autoPlay />}
+        <video ref={remoteVideoRef} autoPlay />
         {isIncomingAudioMuted ? (
           <div>Remote audio is muted</div>
         ) : (
