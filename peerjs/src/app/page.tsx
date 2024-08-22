@@ -13,7 +13,7 @@ const Home = () => {
   const [isIncomingAudioMuted, setIsIncomingAudioMuted] =
     useState<boolean>(false);
   const [isIncomingVideoMuted, setIsIncomingVideoMuted] =
-    useState<boolean>(false);
+    useState<boolean>(true);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -37,6 +37,12 @@ const Home = () => {
             if (localVideoRef.current) {
               localVideoRef.current.srcObject = stream;
             }
+
+            stream.getVideoTracks().forEach((track) => {
+              track.enabled = false;
+            });
+            localVideoRef.current?.pause();
+
             call.answer(stream);
             call.on("stream", (remoteStream) => {
               if (remoteVideoRef.current) {
@@ -85,6 +91,12 @@ const Home = () => {
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
           }
+
+          stream.getVideoTracks().forEach((track) => {
+            track.enabled = false;
+          });
+
+          localVideoRef.current?.pause();
 
           const call = peerInstance.call(remotePeerID, stream);
 
@@ -151,7 +163,7 @@ const Home = () => {
     <div>
       <div>
         <video ref={localVideoRef} autoPlay muted />
-        <video ref={remoteVideoRef} autoPlay />
+        {!isIncomingVideoMuted && <video ref={remoteVideoRef} autoPlay />}
         {isIncomingAudioMuted ? (
           <div>Remote audio is muted</div>
         ) : (
