@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import Peer, { DataConnection } from "peerjs";
 
+const peerVideoElement: Record<string, HTMLVideoElement> = {};
+
 const Home = () => {
   const [peerID, setPeerID] = useState<string>("");
-  const [peerInstance, setPeerInstance] = useState<Peer | null>(null);
   const [remotePeerID, setRemotePeerID] = useState<string>("");
+
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isPeerConnected, setIsPeerConnected] = useState<boolean>(false);
@@ -15,8 +17,8 @@ const Home = () => {
   const [isIncomingVideoMuted, setIsIncomingVideoMuted] =
     useState<boolean>(true);
 
+  const [peerInstance, setPeerInstance] = useState<Peer | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const dataConnectionRef = useRef<DataConnection | null>(null);
 
   useEffect(() => {
@@ -31,50 +33,30 @@ const Home = () => {
       });
 
       peer.on("call", (call) => {
-        navigator.mediaDevices
-          .getUserMedia({ video: true, audio: true })
-          .then((stream) => {
-            if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
-            }
-
-            stream.getVideoTracks().forEach((track) => {
-              track.enabled = false;
-            });
-            localVideoRef.current?.pause();
+        getStream().then((stream) => {
+          if (stream) {
+            const video = document.createElement("video");
+            video.autoplay = true;
+            peerVideoElement[call.peer] = video;
+            document.getElementById("video-grid")?.append(video);
 
             call.answer(stream);
             call.on("stream", (remoteStream) => {
-              if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = remoteStream;
-              }
+              handleRemoteStream(call.peer, remoteStream);
             });
 
             const dataConnection = peer.connect(call.peer);
             dataConnectionRef.current = dataConnection;
             dataConnection.on("open", () => {
-              dataConnection.on("data", (data: any) => {
-                if (data.type === "audio") {
-                  setIsIncomingAudioMuted(data.muted);
-                }
-                if (data.type === "video") {
-                  setIsIncomingVideoMuted(data.muted);
-                }
-              });
+              handleDataConnection(dataConnection);
             });
-          });
+          }
+        });
       });
 
       peer.on("connection", (connection) => {
         dataConnectionRef.current = connection;
-        connection.on("data", (data: any) => {
-          if (data.type === "audio") {
-            setIsIncomingAudioMuted(data.muted);
-          }
-          if (data.type === "video") {
-            setIsIncomingVideoMuted(data.muted);
-          }
-        });
+        handleDataConnection(connection);
       });
     }
 
@@ -83,46 +65,38 @@ const Home = () => {
     };
   }, [peerInstance]);
 
-  const callPeer = () => {
+  const callPeer = (peerId: string) => {
     if (peerInstance && isPeerConnected) {
-      navigator.mediaDevices
-        .getUserMedia({ video: true, audio: true })
-        .then((stream) => {
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = stream;
-          }
-
-          stream.getVideoTracks().forEach((track) => {
-            track.enabled = false;
-          });
-
-          localVideoRef.current?.pause();
-
-          const call = peerInstance.call(remotePeerID, stream);
+      getStream().then((stream) => {
+        if (stream) {
+          const call = peerInstance.call(peerId, stream);
 
           call.on("stream", (remoteStream) => {
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remoteStream;
-            }
+            handleRemoteStream(peerId, remoteStream);
           });
 
-          const dataConnection = peerInstance.connect(remotePeerID);
+          const dataConnection = peerInstance.connect(peerId);
           dataConnectionRef.current = dataConnection;
           dataConnection.on("open", () => {
             dataConnection.send({ type: "audio", muted: isMuted });
-
-            dataConnection.on("data", (data: any) => {
-              if (data.type === "audio") {
-                setIsIncomingAudioMuted(data.muted);
-              }
-              console.log(data);
-              if (data.type === "video") {
-                setIsIncomingVideoMuted(data.muted);
-              }
-            });
+            handleDataConnection(dataConnection);
           });
-        });
+        }
+      });
     }
+  };
+
+  const callMultiplePeers = () => {
+    const peers = remotePeerID.split(",").map((id) => id.trim());
+    peers.forEach((peerId) => {
+      const video = document.createElement("video");
+      video.autoplay = true;
+      peerVideoElement[peerId] = video;
+      document.getElementById("video-grid")?.append(video);
+      callPeer(peerId);
+    });
+
+    setRemotePeerID("");
   };
 
   const toggleMute = () => {
@@ -159,11 +133,45 @@ const Home = () => {
     }
   };
 
+  const getStream = async (): Promise<MediaStream | undefined> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      return stream;
+    } catch (error) {
+      console.error("Error occurred while getting user media", error);
+      return undefined;
+    }
+  };
+
+  const handleDataConnection = (dataConnection: DataConnection) => {
+    dataConnection.on("data", (data: any) => {
+      if (data.type === "audio") {
+        setIsIncomingAudioMuted(data.muted);
+      }
+      if (data.type === "video") {
+        setIsIncomingVideoMuted(data.muted);
+      }
+    });
+  };
+
+  const handleRemoteStream = (peerId: string, remoteStream: MediaStream) => {
+    const video = peerVideoElement[peerId];
+    if (video) {
+      video.srcObject = remoteStream;
+    }
+  };
+
   return (
     <div>
+      <div id="video-grid"></div>
       <div>
         <video ref={localVideoRef} autoPlay muted />
-        <video ref={remoteVideoRef} autoPlay />
         {isIncomingAudioMuted ? (
           <div>Remote audio is muted</div>
         ) : (
@@ -182,13 +190,26 @@ const Home = () => {
       <input
         style={{ color: "black" }}
         type="text"
-        placeholder="Enter peer ID to call"
+        placeholder="Enter peer ID(s) separated by comma"
         value={remotePeerID}
         onChange={(e) => setRemotePeerID(e.target.value)}
       />
       <br />
-      <button onClick={callPeer}>Call</button>
-      <div>Your Peer ID: {peerID}</div>
+      <button onClick={() => callPeer(remotePeerID)}>Call</button>
+      <br />
+      <button onClick={callMultiplePeers}>Call Multiple</button>
+      <div>
+        Your Peer ID:
+        <span
+          onClick={(event) => {
+            navigator.clipboard.writeText(peerID);
+            (event.target as HTMLSpanElement).style.color = "red";
+          }}
+          style={{ color: "green" }}
+        >
+          {peerID}
+        </span>
+      </div>
     </div>
   );
 };

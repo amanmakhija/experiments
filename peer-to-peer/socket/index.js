@@ -1,31 +1,59 @@
 const express = require("express");
 const app = express();
+const cors = require("cors");
 app.use(cors());
 
 const server = require("http").Server(app);
 const io = require("socket.io")(server);
-const { v4: uuidV4 } = require("uuid");
 
-app.get("/", (req, res) => {
-  res.redirect(`/${uuidV4()}`);
-});
-
-app.get("/:room", (req, res) => {
-  res.render("room", { roomId: req.params.room });
-});
+let users = {}; // Store users by userId
 
 io.on("connection", (socket) => {
-  console.log("A user connected", socket.id);
+  console.log(`User connected: ${socket.id}`);
 
-  // Send the new peer's ID to all existing peers
-  socket.on("join-room", (roomId, userId) => {
-    socket.join(roomId); // Join the room
-    socket.broadcast.emit("user-connected", userId); // Tell everyone else in the room that we joined
+  // Handle user joining with a userId
+  socket.on("join", (userId) => {
+    users[userId] = socket.id;
+    console.log("Users after join:", users);
 
-    // Communicate the disconnection
-    socket.on("disconnect", () => {
-      socket.broadcast.emit("user-disconnected", userId);
-    });
+    // Send the updated list of connected peers to everyone
+    io.emit("update-user-list", Object.keys(users));
+  });
+
+  // Handle offers and answers for WebRTC signaling
+  socket.on("offer", (data) => {
+    const targetSocketId = users[data.target];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("offer", data);
+    }
+  });
+
+  socket.on("answer", (data) => {
+    const targetSocketId = users[data.target];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("answer", data);
+    }
+  });
+
+  socket.on("ice-candidate", (data) => {
+    const targetSocketId = users[data.target];
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("ice-candidate", data);
+    }
+  });
+
+  // Handle user disconnection
+  socket.on("disconnect", () => {
+    for (const [userId, socketId] of Object.entries(users)) {
+      if (socketId === socket.id) {
+        delete users[userId];
+        break;
+      }
+    }
+    console.log("Users after disconnect:", users);
+
+    // Send the updated list of connected peers to everyone
+    io.emit("update-user-list", Object.keys(users));
   });
 });
 
