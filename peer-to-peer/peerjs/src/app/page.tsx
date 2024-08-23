@@ -4,41 +4,61 @@ import { useEffect, useRef, useState } from "react";
 import Peer, { DataConnection } from "peerjs";
 
 const peerVideoElement: Record<string, HTMLVideoElement> = {};
+const peerDataConnection: Record<string, DataConnection> = {};
+const connectedPeers: string[] = [];
+const peerToCall: string[] = [];
+
+let peerID: string;
+
+interface Data {
+  type: string;
+  muted: boolean;
+  peers: string[];
+}
 
 const Home = () => {
-  const [peerID, setPeerID] = useState<string>("");
+  const peerIDRef = useRef<string>("");
   const [remotePeerID, setRemotePeerID] = useState<string>("");
 
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isPeerConnected, setIsPeerConnected] = useState<boolean>(false);
+  const isPeerConnectedRef = useRef<boolean>(false);
   const [isIncomingAudioMuted, setIsIncomingAudioMuted] =
     useState<boolean>(false);
   const [isIncomingVideoMuted, setIsIncomingVideoMuted] =
     useState<boolean>(true);
 
+  const peerInstanceRef = useRef<Peer | null>(null);
   const [peerInstance, setPeerInstance] = useState<Peer | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const dataConnectionRef = useRef<DataConnection | null>(null);
 
   useEffect(() => {
     if (!peerInstance) {
-      const peer = new Peer();
+      // getting the constant peer ID for the user
+      const peer = new Peer(peerID, {
+        host: "localhost",
+        port: 3001,
+        path: "/peer-to-peer/peerjs",
+      });
 
+      peerInstanceRef.current = peer;
       setPeerInstance(peer);
 
+      peer.on("error", (error) => {
+        console.error("Error occurred while connecting to peer server:", error);
+      });
+
       peer.on("open", (id: string) => {
-        setPeerID(id);
+        peerIDRef.current = id;
         setIsPeerConnected(true);
+        isPeerConnectedRef.current = true;
       });
 
       peer.on("call", (call) => {
         getStream().then((stream) => {
           if (stream) {
-            const video = document.createElement("video");
-            video.autoplay = true;
-            peerVideoElement[call.peer] = video;
-            document.getElementById("video-grid")?.append(video);
+            createVideoElement(call.peer);
 
             call.answer(stream);
             call.on("stream", (remoteStream) => {
@@ -46,7 +66,6 @@ const Home = () => {
             });
 
             const dataConnection = peer.connect(call.peer);
-            dataConnectionRef.current = dataConnection;
             dataConnection.on("open", () => {
               handleDataConnection(dataConnection);
             });
@@ -55,48 +74,71 @@ const Home = () => {
       });
 
       peer.on("connection", (connection) => {
-        dataConnectionRef.current = connection;
         handleDataConnection(connection);
       });
     }
 
     return () => {
+      if (peerInstanceRef.current) peerInstanceRef.current.destroy();
       if (peerInstance) peerInstance.destroy();
     };
-  }, [peerInstance]);
+  }, [peerID]);
 
   const callPeer = (peerId: string) => {
-    if (peerInstance && isPeerConnected) {
-      getStream().then((stream) => {
-        if (stream) {
-          const call = peerInstance.call(peerId, stream);
-
-          call.on("stream", (remoteStream) => {
-            handleRemoteStream(peerId, remoteStream);
-          });
-
-          const dataConnection = peerInstance.connect(peerId);
-          dataConnectionRef.current = dataConnection;
-          dataConnection.on("open", () => {
-            dataConnection.send({ type: "audio", muted: isMuted });
-            handleDataConnection(dataConnection);
-          });
-        }
+    if (peerInstanceRef.current && isPeerConnectedRef.current) {
+      peerInstanceRef.current.on("error", (error) => {
+        console.error("Error occurred while calling peer:", error);
       });
+
+      createVideoElement(peerId);
+
+      getStream()
+        .then((stream) => {
+          if (stream && peerId && peerInstanceRef.current) {
+            const call = peerInstanceRef.current.call(peerId, stream);
+
+            call.on("error", (error) => {
+              console.error("Error occurred while calling peer:", error);
+            });
+
+            if (!call) {
+              console.error("Failed to establish call with peer:", peerId);
+              return;
+            }
+
+            call.on("stream", (remoteStream) => {
+              handleRemoteStream(peerId, remoteStream);
+            });
+
+            const dataConnection = peerInstanceRef.current.connect(peerId);
+            dataConnection.on("open", () => {
+              handleDataConnection(dataConnection);
+            });
+          }
+        })
+        .catch((error) => {
+          console.error("Error occurred while getting user media", error);
+        });
     }
   };
 
   const callMultiplePeers = () => {
     const peers = remotePeerID.split(",").map((id) => id.trim());
+    connectedPeers.push(...peers);
+    peerToCall.push(...peers);
     peers.forEach((peerId) => {
-      const video = document.createElement("video");
-      video.autoplay = true;
-      peerVideoElement[peerId] = video;
-      document.getElementById("video-grid")?.append(video);
       callPeer(peerId);
     });
 
     setRemotePeerID("");
+  };
+
+  const createVideoElement = (peerId: string) => {
+    const video = document.createElement("video");
+    video.autoplay = true;
+    peerVideoElement[peerId] = video;
+    document.getElementById("video-grid")?.append(video);
+    return video;
   };
 
   const toggleMute = () => {
@@ -111,9 +153,9 @@ const Home = () => {
         });
     }
 
-    if (dataConnectionRef.current) {
-      dataConnectionRef.current.send({ type: "audio", muted: newMuteState });
-    }
+    Object.keys(peerDataConnection).forEach((peer) => {
+      peerDataConnection[peer].send({ type: "audio", muted: newMuteState });
+    });
   };
 
   const togglePause = () => {
@@ -128,9 +170,9 @@ const Home = () => {
       else localVideoRef.current.play();
     }
 
-    if (dataConnectionRef.current) {
-      dataConnectionRef.current.send({ type: "video", muted: isPaused });
-    }
+    Object.keys(peerDataConnection).forEach((peer) => {
+      peerDataConnection[peer].send({ type: "video", muted: isPaused });
+    });
   };
 
   const getStream = async (): Promise<MediaStream | undefined> => {
@@ -150,21 +192,46 @@ const Home = () => {
   };
 
   const handleDataConnection = (dataConnection: DataConnection) => {
-    dataConnection.on("data", (data: any) => {
-      if (data.type === "audio") {
-        setIsIncomingAudioMuted(data.muted);
-      }
-      if (data.type === "video") {
-        setIsIncomingVideoMuted(data.muted);
+    peerDataConnection[dataConnection.peer] = dataConnection;
+    dataConnection.send({ type: "peerList", peers: peerToCall });
+    dataConnection.send({ type: "audio", muted: isMuted });
+    dataConnection.send({ type: "video", muted: isPaused });
+
+    peerToCall.splice(peerToCall.indexOf(dataConnection.peer), 1);
+
+    const isData = (data: unknown): data is Data => {
+      return (
+        typeof data === "object" &&
+        data !== null &&
+        "type" in data &&
+        ("muted" in data || "peers" in data)
+      );
+    };
+
+    dataConnection.on("data", (data: unknown) => {
+      if (!isData(data)) return;
+
+      if (data.type === "audio") setIsIncomingAudioMuted(data.muted);
+      if (data.type === "video") setIsIncomingVideoMuted(data.muted);
+      if (data.type === "peerList") {
+        const peers: string[] = data.peers;
+        const newPeers = peers
+          .map((peer: string) => peer.trim())
+          .filter((peer: string) => {
+            return peer !== peerIDRef.current && !connectedPeers.includes(peer);
+          });
+        connectedPeers.push(...newPeers);
+
+        newPeers.forEach((peer: string) => {
+          callPeer(peer);
+        });
       }
     });
   };
 
   const handleRemoteStream = (peerId: string, remoteStream: MediaStream) => {
     const video = peerVideoElement[peerId];
-    if (video) {
-      video.srcObject = remoteStream;
-    }
+    video.srcObject = remoteStream;
   };
 
   return (
@@ -189,7 +256,6 @@ const Home = () => {
       <br />
       <input
         style={{ color: "black" }}
-        type="text"
         placeholder="Enter peer ID(s) separated by comma"
         value={remotePeerID}
         onChange={(e) => setRemotePeerID(e.target.value)}
@@ -202,14 +268,24 @@ const Home = () => {
         Your Peer ID:
         <span
           onClick={(event) => {
-            navigator.clipboard.writeText(peerID);
+            navigator.clipboard.writeText(peerIDRef.current);
             (event.target as HTMLSpanElement).style.color = "red";
           }}
           style={{ color: "green" }}
         >
-          {peerID}
+          {peerIDRef.current}
         </span>
       </div>
+      <input
+        placeholder="Enter peer ID"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            peerID = e.currentTarget.value;
+            e.currentTarget.blur();
+          }
+        }}
+        style={{ color: "black" }}
+      />
     </div>
   );
 };
