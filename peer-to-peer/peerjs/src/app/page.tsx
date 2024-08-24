@@ -37,9 +37,9 @@ const Home = () => {
     if (!peerInstance) {
       // getting the constant peer ID for the user
       const peer = new Peer(peerID, {
-        host: "localhost",
-        port: 3001,
+        host: "peer.himanshujangid.com",
         path: "/peer-to-peer/peerjs",
+        port: 443,
       });
 
       peerInstanceRef.current = peer;
