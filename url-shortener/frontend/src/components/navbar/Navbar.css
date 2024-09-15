@@ -1,0 +1,37 @@
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: #f8f9fa;
+  color: #333;
+  border-bottom: 1px solid #ddd;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  position: fixed;
+  width: 100vw;
+}
+
+.navbar.dark {
+  background-color: #343a40;
+  color: #f8f9fa;
+}
+
+.navbar-logo {
+  font-size: 1.5rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.navbar-container {
+  width: 100%;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+}
+
+.theme-selector {
+  height: 2rem;
+  border-radius: 5px;
+  background-color: #f8f9fa;
+  cursor: pointer;
+}

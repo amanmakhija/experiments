@@ -13,10 +13,6 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 
-app.get("/", (req, res, next) => {
-  res.send("Hello world");
-});
-
 var httpServer = http.createServer(app);
 var httpsServer = https.createServer(app);
 
@@ -28,6 +24,6 @@ app.use("/peer-to-peer", peerServer);
 //   console.log("HTTP Server running on port 80");
 // });
 
-httpServer.listen(443, () => {
-  console.log("HTTPS Server running on port 443");
+httpServer.listen(9000, () => {
+  console.log("HTTPS Server running on port 9000");
 });
