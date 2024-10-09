@@ -9,6 +9,7 @@ const mediasoup = require("mediasoup");
 // Global variables
 let worker;
 let webServer;
+let rooms = {};
 let expressApp;
 let socketServer;
 let producer = {};
@@ -159,12 +160,17 @@ async function runSocketServer() {
     });
 
     socket.on("produce", async (data, callback) => {
-      const { kind, rtpParameters, userId } = data;
+      const { kind, rtpParameters, userId, roomId } = data;
       const newProducer = await producerTransport[userId].produce({
         kind,
         rtpParameters,
       });
       producer[userId] = newProducer;
+      if (rooms[roomId] === undefined) {
+        rooms[roomId] = [userId];
+      } else {
+        rooms[roomId].push(userId);
+      }
       callback({ id: userId });
 
       // inform clients about new producer
@@ -175,7 +181,7 @@ async function runSocketServer() {
       let consumers = {};
       try {
         // Iterate over all producers and create consumers for them
-        for (const producerId of Object.keys(producer)) {
+        for (const producerId of rooms[data.roomId]) {
           // Skip consuming your own stream
           if (producerId === data.userId) continue;
 

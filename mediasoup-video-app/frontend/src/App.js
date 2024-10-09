@@ -42,6 +42,7 @@ const App = () => {
   const [device, setDevice] = useState(null);
   const [socket, setSocket] = useState(null);
   const [userId, setUserId] = useState(null);
+  const [roomId, setRoomId] = useState(null);
   // const hasSubscribed = useRef(false);
 
   // Initialize connection when the component is mounted
@@ -52,6 +53,10 @@ const App = () => {
         const id = prompt("Enter your user id");
         connect(id);
         return id;
+      });
+      setRoomId(() => {
+        // requesting room id from user
+        return prompt("Enter room id");
       });
     }
 
@@ -172,6 +177,7 @@ const App = () => {
             kind,
             rtpParameters,
             userId,
+            roomId,
           });
           callback({ id });
         } catch (err) {
@@ -310,6 +316,7 @@ const App = () => {
     const consumerDataList = await socket.request("consume", {
       rtpCapabilities,
       userId,
+      roomId,
     });
 
     Object.keys(consumerDataList).map(async (key) => {
