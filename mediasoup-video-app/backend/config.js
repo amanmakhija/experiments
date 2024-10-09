@@ -1,8 +1,8 @@
 module.exports = {
   listenIp: "0.0.0.0",
   listenPort: 4000,
-  sslCrt: "./certs/server.crt",
-  sslKey: "./certs/server.key",
+  sslCrt: "./certs/localhost/localhost.crt",
+  sslKey: "./certs/localhost/localhost.decrypted.key",
   mediasoup: {
     // Worker settings
     worker: {

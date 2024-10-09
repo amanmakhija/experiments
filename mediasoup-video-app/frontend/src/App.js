@@ -3,7 +3,7 @@ import { io as socketClient } from "socket.io-client";
 import { Device } from "mediasoup-client";
 const socketPromise = require("./lib/socket.io-promise").promise;
 
-const SERVER_URL = "https://localhost:4000";
+const SERVER_URL = "http://localhost:4000";
 
 const App = () => {
   const [connectButton, setConnectButton] = useState({
@@ -239,11 +239,14 @@ const App = () => {
             streams.forEach((stream) => {
               if (stream && stream.active) {
                 const video = document.createElement("video");
+                const row = document.createElement("tr");
+                const td = document.createElement("td");
                 video.srcObject = stream;
                 video.autoplay = true;
-                video.playsInline = true;
-                video.controls = true;
-                document.querySelector("#videos").appendChild(video);
+                video.controls = false;
+                td.appendChild(video);
+                row.appendChild(td);
+                document.querySelector("#videos").appendChild(row);
               }
             });
             await socket.request("resume");
@@ -303,13 +306,14 @@ const App = () => {
   return (
     <div className="App">
       <h1>MediaSoup WebRTC Call</h1>
-      <table>
-        <tr id="videos">
+      <table id="videos">
+        <tr>
           <td>
             <div>Local</div>
-            <video id="local_video" controls autoPlay playsInline muted></video>
+            <video id="local_video" autoPlay muted></video>
           </td>
         </tr>
+        <tr>Remote</tr>
       </table>
       <br />
       <table>

@@ -1,5 +1,5 @@
 const fs = require("fs");
-const https = require("https");
+const http = require("http");
 const config = require("./config");
 const express = require("express");
 const socketIO = require("socket.io");
@@ -60,7 +60,7 @@ async function runWebServer() {
     cert: fs.readFileSync(sslCrt),
     key: fs.readFileSync(sslKey),
   };
-  webServer = https.createServer(tls, expressApp);
+  webServer = http.createServer(expressApp);
   webServer.on("error", (err) => {
     console.error("starting web server failed:", err.message);
   });
@@ -182,10 +182,22 @@ async function runSocketServer() {
     });
 
     socket.on("resume", async (data, callback) => {
-      Object.keys(globalConsumers).forEach(async (consumerId) => {
-        await globalConsumers[consumerId].resume();
-      });
-      callback();
+      try {
+        // Iterate over all the consumers for each socket
+        Object.keys(globalConsumers).forEach(async (socketId) => {
+          const socketConsumers = globalConsumers[socketId];
+          Object.keys(socketConsumers).forEach(async (producerId) => {
+            const consumer = socketConsumers[producerId];
+            if (consumer && typeof consumer.resume === "function") {
+              await consumer.resume();
+            }
+          });
+        });
+        callback();
+      } catch (error) {
+        console.error("Error resuming consumers:", error);
+        callback({ error: error.message });
+      }
     });
   });
 }
@@ -256,7 +268,13 @@ async function createConsumer(producer, rtpCapabilities, socketId) {
       paused: producer.kind === "video", // Start paused if it's a video
     });
 
-    globalConsumers[socketId] = consumer;
+    // If the socket has no consumers yet, initialize the object
+    if (!globalConsumers[socketId]) {
+      globalConsumers[socketId] = {};
+    }
+
+    // Store this consumer for the current producerId under the socketId
+    globalConsumers[socketId][producer.id] = consumer;
 
     // Return consumer data
     return {
