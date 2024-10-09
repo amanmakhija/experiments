@@ -1,5 +1,6 @@
 const fs = require("fs");
-const http = require("http");
+const path = require("path");
+const http = require("https");
 const config = require("./config");
 const express = require("express");
 const socketIO = require("socket.io");
@@ -15,6 +16,7 @@ let mediasoupRouter;
 let globalConsumers = {};
 let producerTransport = {};
 let consumerTransport = {};
+let socketIdUserMapping = {};
 
 (async () => {
   try {
@@ -30,10 +32,18 @@ let consumerTransport = {};
 async function runExpressApp() {
   expressApp = express();
   expressApp.use(express.json());
-  expressApp.use(express.static(__dirname));
+  expressApp.use(express.static(path.join(__dirname, "../frontend/build")));
 
   expressApp.get("/", (req, res) => {
-    res.json({ message: "Hello from mediasoup server" });
+    res.sendFile(path.join(__dirname, "../frontend/build", "index.html"));
+  });
+
+  expressApp.post("/logger", (req, res) => {
+    const { message } = req.body;
+    console.log(`Logs ${new Date()}: ${message}`);
+
+    // Send a response to confirm logging
+    res.send("Logger is working");
   });
 
   expressApp.use((error, req, res, next) => {
@@ -60,7 +70,7 @@ async function runWebServer() {
     cert: fs.readFileSync(sslCrt),
     key: fs.readFileSync(sslKey),
   };
-  webServer = http.createServer(expressApp);
+  webServer = http.createServer(tls, expressApp);
   webServer.on("error", (err) => {
     console.error("starting web server failed:", err.message);
   });
@@ -86,15 +96,22 @@ async function runSocketServer() {
   socketServer.on("connection", (socket) => {
     console.log("client connected", socket.id);
 
-    // inform the client about existence of producer
-    if (producer) {
-      socket.emit("newProducer");
-    }
+    socket.on("registeruser", (data) => {
+      console.log("registering user", data.userId);
+      socketIdUserMapping[socket.id] = data.userId;
+    });
 
     socket.on("disconnect", () => {
       console.log("client disconnected", socket.id);
-      delete producer[socket.id];
-      delete globalConsumers[socket.id];
+      const userId = socketIdUserMapping[socket.id];
+      delete producer[userId];
+      delete globalConsumers[userId];
+      delete producerTransport[userId];
+      delete consumerTransport[userId];
+      delete socketIdUserMapping[socket.id];
+
+      // inform clients about disconnected producer
+      socket.broadcast.emit("producerDisconnected", userId);
     });
 
     socket.on("connect_error", (err) => {
@@ -108,7 +125,7 @@ async function runSocketServer() {
     socket.on("createProducerTransport", async (data, callback) => {
       try {
         const { transport, params } = await createWebRtcTransport();
-        producerTransport[socket.id] = transport;
+        producerTransport[data.userId] = transport;
         callback(params);
       } catch (err) {
         console.error(err);
@@ -119,7 +136,7 @@ async function runSocketServer() {
     socket.on("createConsumerTransport", async (data, callback) => {
       try {
         const { transport, params } = await createWebRtcTransport();
-        consumerTransport[socket.id] = transport;
+        consumerTransport[data.userId] = transport;
         callback(params);
       } catch (err) {
         console.error(err);
@@ -128,30 +145,30 @@ async function runSocketServer() {
     });
 
     socket.on("connectProducerTransport", async (data, callback) => {
-      await producerTransport[socket.id].connect({
+      await producerTransport[data.userId].connect({
         dtlsParameters: data.dtlsParameters,
       });
       callback();
     });
 
     socket.on("connectConsumerTransport", async (data, callback) => {
-      await consumerTransport[socket.id].connect({
+      await consumerTransport[data.userId].connect({
         dtlsParameters: data.dtlsParameters,
       });
       callback();
     });
 
     socket.on("produce", async (data, callback) => {
-      const { kind, rtpParameters } = data;
-      const newProducer = await producerTransport[socket.id].produce({
+      const { kind, rtpParameters, userId } = data;
+      const newProducer = await producerTransport[userId].produce({
         kind,
         rtpParameters,
       });
-      producer[socket.id] = newProducer;
-      callback({ id: socket.id });
+      producer[userId] = newProducer;
+      callback({ id: userId });
 
       // inform clients about new producer
-      socket.broadcast.emit("newProducer");
+      socket.broadcast.emit("newProducer", userId);
     });
 
     socket.on("consume", async (data, callback) => {
@@ -160,12 +177,12 @@ async function runSocketServer() {
         // Iterate over all producers and create consumers for them
         for (const producerId of Object.keys(producer)) {
           // Skip consuming your own stream
-          if (producerId === data.ownProducerId) continue;
+          if (producerId === data.userId) continue;
 
           const consumerData = await createConsumer(
             producer[producerId],
             data.rtpCapabilities,
-            socket.id
+            data.userId
           );
 
           if (consumerData) {

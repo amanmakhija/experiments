@@ -1,9 +1,30 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { io as socketClient } from "socket.io-client";
 import { Device } from "mediasoup-client";
+import axios from "axios";
 const socketPromise = require("./lib/socket.io-promise").promise;
 
-const SERVER_URL = "http://localhost:4000";
+const SERVER_URL = `https://${window.location.hostname}:4000`;
+
+const originalLog = console.log;
+console.log = (...message) => {
+  // Call the original console.log with the message
+  originalLog(...message);
+
+  // Send the log data to the server using axios
+  axios
+    .post("/logger", {
+      message: message
+        .map((m) => (typeof m === "object" ? JSON.stringify(m) : m.toString()))
+        .join(", "),
+    })
+    .then(() => {
+      originalLog("Log sent to the server");
+    })
+    .catch((error) => {
+      originalLog("Error sending log to the server:", error);
+    });
+};
 
 const App = () => {
   const [connectButton, setConnectButton] = useState({
@@ -20,12 +41,18 @@ const App = () => {
   });
   const [device, setDevice] = useState(null);
   const [socket, setSocket] = useState(null);
-  const [ownProducerId, setOwnProducerId] = useState(null);
+  const [userId, setUserId] = useState(null);
+  // const hasSubscribed = useRef(false);
 
   // Initialize connection when the component is mounted
   useEffect(() => {
     if (!socket) {
-      connect();
+      setUserId(() => {
+        // requesting user id from user
+        const id = prompt("Enter your user id");
+        connect(id);
+        return id;
+      });
     }
 
     return () => {
@@ -35,7 +62,7 @@ const App = () => {
     };
   }, [socket]);
 
-  async function connect() {
+  async function connect(id) {
     setConnectButton({ disabled: true, text: "Connecting..." });
 
     const opts = {
@@ -50,8 +77,6 @@ const App = () => {
       setSocket(socketServer);
     }
 
-    console.log("socket", socketServer);
-
     socketServer.on("connect", async () => {
       setConnectButton({ disabled: true, text: "Connected" });
       setWebcamButton({ disabled: false, text: "" });
@@ -62,14 +87,17 @@ const App = () => {
       if (!device) {
         await loadDevice(data);
       }
+
+      // Register the user id
+      socketServer.emit("registeruser", { userId: id });
     });
 
-    socketServer.on("disconnect", () => {
+    socketServer.on("disconnect", { userId }, () => {
       setConnectButton({ disabled: false, text: "Disconnected" });
     });
 
     socketServer.on("connect_error", (error) => {
-      console.error(
+      console.log(
         "could not connect to %s%s (%s)",
         SERVER_URL,
         opts.path,
@@ -78,8 +106,20 @@ const App = () => {
       setConnectButton({ disabled: false, text: "Connection failed" });
     });
 
-    socketServer.on("newProducer", () => {
-      setWebcamButton({ disabled: false, text: "" });
+    socketServer.on("newProducer", async (userId) => {
+      console.log("new producer", userId);
+      // if (hasSubscribed.current) {
+      //   console.log("subscribing to new producer", userId);
+      //   await subscribe(null, userId);
+      // }
+    });
+
+    socketServer.on("producerDisconnected", (userId) => {
+      console.log("producer disconnected", userId);
+      const video = document.getElementById(userId);
+      if (video) {
+        video.remove();
+      }
     });
   }
 
@@ -92,32 +132,33 @@ const App = () => {
       }
     } catch (error) {
       if (error.name === "UnsupportedError") {
-        console.error("browser not supported");
-      } else console.error("Error loading device:", error);
+        console.log("browser not supported");
+      } else console.log("Error loading device:", error);
     }
   }
 
   async function publish(e) {
     e.preventDefault();
     if (!device) {
-      console.error("Device not loaded yet.");
+      console.log("Device not loaded yet.");
       return;
     }
 
     const data = await socket.request("createProducerTransport", {
       forceTcp: false,
       rtpCapabilities: device.rtpCapabilities,
+      userId,
     });
 
     if (data.error) {
-      console.error(data.error);
+      console.log(data.error);
       return;
     }
 
     const transport = device.createSendTransport(data);
     transport.on("connect", async ({ dtlsParameters }, callback, errback) => {
       socket
-        .request("connectProducerTransport", { dtlsParameters })
+        .request("connectProducerTransport", { dtlsParameters, userId })
         .then(callback)
         .catch(errback);
     });
@@ -130,9 +171,9 @@ const App = () => {
             transportId: transport.id,
             kind,
             rtpParameters,
+            userId,
           });
           callback({ id });
-          setOwnProducerId(id);
         } catch (err) {
           errback(err);
         }
@@ -177,39 +218,42 @@ const App = () => {
         await transport.produce(videoParams);
       }
     } catch (err) {
+      console.log("Failed to get media stream:", err);
       setWebcamButton({ disabled: false, text: "failed" });
     }
   }
 
   async function getUserMedia() {
     if (!device.canProduce("video")) {
-      console.error("Cannot produce video");
+      console.log("Cannot produce video");
       return;
     }
 
-    let stream;
+    const constraints = {
+      video: {
+        facingMode: "user", // or "environment" for back camera
+      },
+    };
+
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true,
-      });
+      return navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
-      console.error("getUserMedia() failed:", err.message);
+      console.log("getUserMedia() failed:", err.message);
       throw err;
     }
-    return stream;
   }
 
   async function subscribe(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
 
     // Request the creation of a consumer transport
     const data = await socket.request("createConsumerTransport", {
       forceTcp: false,
+      userId,
     });
 
     if (data.error) {
-      console.error("Error creating consumer transport:", data.error);
+      console.log("Error creating consumer transport:", data.error);
       return;
     }
 
@@ -221,6 +265,7 @@ const App = () => {
         .request("connectConsumerTransport", {
           transportId: transport.id,
           dtlsParameters,
+          userId,
         })
         .then(callback)
         .catch(errback);
@@ -236,23 +281,11 @@ const App = () => {
           // This is where we will handle the media once the connection is made
           try {
             // Ensure the stream is awaited properly
-            streams.forEach((stream) => {
-              if (stream && stream.active) {
-                const video = document.createElement("video");
-                const row = document.createElement("tr");
-                const td = document.createElement("td");
-                video.srcObject = stream;
-                video.autoplay = true;
-                video.controls = false;
-                td.appendChild(video);
-                row.appendChild(td);
-                document.querySelector("#videos").appendChild(row);
-              }
-            });
             await socket.request("resume");
+            // hasSubscribed.current = true;
             setSubscribeButton({ disabled: true, text: "subscribed" });
           } catch (err) {
-            console.error("Failed to get media stream:", err);
+            console.log("Failed to get media stream:", err);
           }
           break;
 
@@ -267,7 +300,7 @@ const App = () => {
     });
 
     // Await the consumer function
-    const streams = await consume(transport);
+    await consume(transport);
   }
 
   async function consume(transport) {
@@ -276,31 +309,36 @@ const App = () => {
     // Request to consume streams, excluding own producerId
     const consumerDataList = await socket.request("consume", {
       rtpCapabilities,
-      ownProducerId,
+      userId,
     });
 
-    return Promise.all(
-      Object.keys(consumerDataList).map(async (key) => {
-        // Create a MediaStream object to hold the incoming media
-        const stream = new MediaStream();
+    Object.keys(consumerDataList).map(async (key) => {
+      // Create a MediaStream object to hold the incoming media
+      const stream = new MediaStream();
 
-        // Iterate through each consumerData and add tracks to the MediaStream
-        const { producerId, id, kind, rtpParameters } = consumerDataList[key];
+      // Iterate through each consumerData and add tracks to the MediaStream
+      const { producerId, id, kind, rtpParameters } = consumerDataList[key];
 
-        const consumer = await transport.consume({
-          id,
-          producerId,
-          kind,
-          rtpParameters,
-        });
+      const consumer = await transport.consume({
+        id,
+        producerId,
+        kind,
+        rtpParameters,
+      });
 
-        // Add the consumer track to the media stream
-        stream.addTrack(consumer.track);
+      stream.addTrack(consumer.track);
 
-        // Return the media stream to be used in the video element
-        return stream;
-      })
-    );
+      const row = document.createElement("tr");
+      const td = document.createElement("td");
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.autoplay = true;
+      video.controls = false;
+      td.appendChild(video);
+      row.appendChild(td);
+      row.id = key;
+      document.querySelector("#videos").appendChild(row);
+    });
   }
 
   return (
@@ -353,6 +391,7 @@ const App = () => {
           </td>
         </tr>
       </table>
+      <div id="logs"></div>
     </div>
   );
 };
